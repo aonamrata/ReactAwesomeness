@@ -1,84 +1,117 @@
-import { AppLoading, Notifications  } from 'expo';
-import { Asset } from 'expo-asset';
-import * as Font from 'expo-font';
-import React, { useState } from 'react';
-import { Platform, StatusBar, StyleSheet, View } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
+import React from 'react';
+import { Text, View, Button, StyleSheet  } from 'react-native';
+import { Notifications } from 'expo';
+import * as Permissions from 'expo-permissions';
+import Constants from 'expo-constants';
+import writeToDatadog from './WriteDatadog';
 
-import AppNavigator from './navigation/AppNavigator';
-import registerForPushNotificationsAsync from './PushNotification';
-import handlePushNotification from './NotificationHandler';
+let YOUR_PUSH_TOKEN = '';
 
-export default function App(props) {
-  const [isLoadingComplete, setLoadingComplete] = useState(false);
+export default class AppContainer extends React.Component {
+  state = {
+    notification: {},
+  };
 
-  if (!isLoadingComplete && !props.skipLoadingScreen) {
-    return (
-      <AppLoading
-        startAsync={loadResourcesAsync}
-        onError={handleLoadingError}
-        onFinish={() => handleFinishLoading(setLoadingComplete)}
-      />
-    );
-  } else {
-    registerForPushNotificationsAsync();
+  registerForPushNotificationsAsync = async () => {
+    if (Constants.isDevice) {
+      const { status: existingStatus } = await Permissions.getAsync(
+        Permissions.NOTIFICATIONS
+      );
+      let finalStatus = existingStatus;
+      if (existingStatus !== 'granted') {
+        const { status } = await Permissions.askAsync(
+          Permissions.NOTIFICATIONS
+        );
+        finalStatus = status;
+      }
+      if (finalStatus !== 'granted') {
+        alert('Failed to get push token for push notification!');
+        return;
+      }
+      let token = await Notifications.getExpoPushTokenAsync();
+      console.log(token);
+      alert(token);
+      YOUR_PUSH_TOKEN = token;
+      writeToDatadog({"got expoToken": token});
+      this.setState({ expo_token: YOUR_PUSH_TOKEN });
+    } else {
+      alert('Must use physical device for Push Notifications');
+    }
+  };
+
+  componentDidMount() {
+    this.registerForPushNotificationsAsync();
+
     // Handle notifications that are received or selected while the app
     // is open. If the app was closed and then opened by tapping the
     // notification (rather than just tapping the app icon to open it),
     // this function will fire on the next tick after the app starts
     // with the notification data.
-    Notifications.addListener(payload => alert(JSON.stringify(payload)));
-    this._notificationSubscription = Notifications.addListener(handleNotification);
-    console.warn("_notificationSubscription done");
+    this._notificationSubscription = Notifications.addListener(
+      this._handleNotification
+    );
+  }
+
+  _handleNotification = notification => {
+    console.log("got notification==", JSON.stringify(notification));
+    this.setState({ notification: notification });
+    writeToDatadog({"got notification": notification});
+  };
+
+  // Can use this function below, OR use Expo's Push Notification Tool-> https://expo.io/dashboard/notifications
+  sendPushNotification = async () => {
+    const message = {
+      to: YOUR_PUSH_TOKEN,
+      sound: 'default',
+      title: 'Original Title',
+      body: 'And here is the body!',
+      data: { data: 'goes here' },
+    };
+    const response = await fetch('https://exp.host/--/api/v2/push/send', {
+      method: 'POST',
+      headers: {
+        Accept: 'application/json',
+        'Accept-encoding': 'gzip, deflate',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(message),
+    });
+    const data = response._bodyInit;
+    console.log(`Status & Response ID-> ${data}`);
+  };
+
+  render() {
     return (
-      <View style={styles.container}>
-        {Platform.OS === 'ios' && <StatusBar barStyle="default" />}
-        <AppNavigator />
+      <View
+        style={{
+          flex: 1,
+          alignItems: 'center',
+          justifyContent: 'space-around',
+        }}>
+        <View style={{ alignItems: 'center', justifyContent: 'center' }}>
+          <Text style={{fontWeight: 'bold'}}>Expo Token: {this.state.expo_token}</Text>
+
+        </View>
+        <View style={{ alignItems: 'center', justifyContent: 'center' }}>
+          <Text>Notification Origin: {this.state.notification.origin}</Text>
+          <Text >Notification Data: {JSON.stringify(this.state.notification.data)}</Text>
+          <Text>{'\n'} Notification Full Data:{'\n'} {JSON.stringify(this.state.notification)}</Text>
+        </View>
+        <Button
+          title={'Press to Send Notification'}
+          onPress={() => this.sendPushNotification()}
+        />
       </View>
     );
   }
 }
 
+/*  TO GET PUSH RECEIPTS, RUN THE FOLLOWING COMMAND IN TERMINAL, WITH THE RECEIPTID SHOWN IN THE CONSOLE LOGS
 
-const handleNotification = (notification) => {
-  // do whatever you want to do with the notification
-  console.log("In handleNotification");
+    curl -H "Content-Type: application/json" -X POST "https://exp.host/--/api/v2/push/getReceipts" -d '{
+      "ids": ["YOUR RECEIPTID STRING HERE"]
+      }'
 
-  handlePushNotification(notification);
-  alert(`Got notification ${JSON.stringify(notification)}`);
-};
-
+    */
 
 
-async function loadResourcesAsync() {
-  await Promise.all([
-    Asset.loadAsync([
-      require('./assets/images/robot-dev.png'),
-      require('./assets/images/robot-prod.png'),
-    ]),
-    Font.loadAsync({
-      // This is the font that we are using for our tab bar
-      ...Ionicons.font,
-      // We include SpaceMono because we use it in HomeScreen.js. Feel free to
-      // remove this if you are not using it in your app
-      'space-mono': require('./assets/fonts/SpaceMono-Regular.ttf'),
-    }),
-  ]);
-}
-
-function handleLoadingError(error) {
-  // In this case, you might want to report the error to your error reporting
-  // service, for example Sentry
-  console.warn(error);
-}
-
-function handleFinishLoading(setLoadingComplete) {
-  setLoadingComplete(true);
-}
-
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#fff',
-  },
-});
